@@ -4,6 +4,8 @@ import time
 import faiss
 import numpy as np
 import matplotlib.pyplot as plt
+import csv
+import logging
 from typing import Tuple, List
 
 # === Load Data ===
@@ -56,6 +58,13 @@ def load_mock_diskann_results():
     return diskann_recalls, diskann_latencies, diskann_labels
 
 # === Plot Latency vs Recall ===
+def _get_output_dir() -> str:
+    try:
+        return os.path.dirname(__file__)
+    except NameError:
+        return '.'
+
+
 def draw_latency_vs_recall(hnsw_data, diskann_data, ef_vals, diskann_labels):
     hnsw_recalls, hnsw_latencies = hnsw_data
     diskann_recalls, diskann_latencies = diskann_data
@@ -76,8 +85,46 @@ def draw_latency_vs_recall(hnsw_data, diskann_data, ef_vals, diskann_labels):
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("latency_vs_recall.png")
+    out_dir = _get_output_dir()
+    output_path = os.path.join(out_dir, "part3_latency_vs_recall.png")
+    plt.savefig(output_path, dpi=300)
+    logging.info(f"图表已保存: {output_path}")
     plt.show()
+
+
+def save_results_to_csv_part3(ef_vals: List[int], hnsw_recalls: List[float], hnsw_latencies: List[float],
+                              diskann_recalls: List[float], diskann_latencies: List[float], diskann_labels: List[str],
+                              M: int = 32, ef_construction: int = 200) -> None:
+    out_dir = _get_output_dir()
+
+    # HNSW 结果
+    hnsw_csv = os.path.join(out_dir, "part3_hnsw_results.csv")
+    with open(hnsw_csv, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["algorithm", "M", "efConstruction", "efSearch", "recall@1", "1-recall@1", "latency_ms"])
+        for ef, r, l in zip(ef_vals, hnsw_recalls, hnsw_latencies):
+            writer.writerow(["HNSW", M, ef_construction, ef, f"{r:.6f}", f"{1.0 - r:.6f}", f"{l:.6f}"])
+    logging.info(f"HNSW 结果已保存: {hnsw_csv}")
+
+    # DiskANN 结果（占位）
+    diskann_csv = os.path.join(out_dir, "part3_diskann_results.csv")
+    with open(diskann_csv, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["algorithm", "label", "recall@1", "1-recall@1", "latency_ms"])
+        for label, r, l in zip(diskann_labels, diskann_recalls, diskann_latencies):
+            writer.writerow(["DiskANN", label, f"{r:.6f}", f"{1.0 - r:.6f}", f"{l:.6f}"])
+    logging.info(f"DiskANN 结果已保存: {diskann_csv}")
+
+    # 合并结果
+    combined_csv = os.path.join(out_dir, "part3_results.csv")
+    with open(combined_csv, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["algorithm", "param", "value", "M", "efConstruction", "recall@1", "1-recall@1", "latency_ms"])
+        for ef, r, l in zip(ef_vals, hnsw_recalls, hnsw_latencies):
+            writer.writerow(["HNSW", "efSearch", ef, M, ef_construction, f"{r:.6f}", f"{1.0 - r:.6f}", f"{l:.6f}"])
+        for label, r, l in zip(diskann_labels, diskann_recalls, diskann_latencies):
+            writer.writerow(["DiskANN", "label", label, "", "", f"{r:.6f}", f"{1.0 - r:.6f}", f"{l:.6f}"])
+    logging.info(f"综合结果已保存: {combined_csv}")
 
 # === Main ===
 def main():
@@ -85,7 +132,8 @@ def main():
     if not os.path.exists("SIFT1M.hdf5"):
         raise FileNotFoundError("Missing SIFT1M.hdf5 — download it from http://ann-benchmarks.com/sift-128-euclidean.hdf5")
 
-    print("📦 Loading SIFT1M dataset...")
+    logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%H:%M:%S')
+    logging.info("Loading SIFT1M dataset…")
     train, test, neighbors = read_sift1m()
 
     # Run HNSW
@@ -94,6 +142,12 @@ def main():
 
     diskann_recalls, diskann_latencies, diskann_labels = load_mock_diskann_results()
     draw_latency_vs_recall(hnsw_data, (diskann_recalls, diskann_latencies), ef_vals, diskann_labels)
+
+    # 保存结果到 CSV（仅新增结果收集，不改原有流程）
+    hnsw_recalls, hnsw_latencies = hnsw_data
+    save_results_to_csv_part3(ef_vals, hnsw_recalls, hnsw_latencies,
+                              diskann_recalls, diskann_latencies, diskann_labels,
+                              M=32, ef_construction=200)
 
 
 if __name__ == "__main__":

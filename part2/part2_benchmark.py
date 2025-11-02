@@ -6,6 +6,7 @@ import requests
 import numpy as np
 import matplotlib.pyplot as plt
 import csv
+import logging
 from typing import Tuple, Dict, List
 
 
@@ -38,15 +39,30 @@ EF_CONSTRUCTION = 200
 EF_SEARCH = 200
 
 
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
+
+
+def _get_output_dir() -> str:
+    try:
+        return os.path.dirname(__file__)
+    except NameError:
+        return '.'
+
+
 def download_dataset(url: str, filename: str):
     """下载数据集文件（带进度条）"""
     filepath = os.path.join('.', filename)
     
     if os.path.exists(filepath):
-        print(f"✅ 文件已存在: {filepath}")
+        logging.info(f"文件已存在: {filepath}")
         return filepath
     
-    print(f"📥 下载 {filename} ...")
+    logging.info(f"开始下载: {filename}")
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, stream=True, timeout=300)
@@ -64,12 +80,13 @@ def download_dataset(url: str, filename: str):
                         percent = (downloaded / total_size) * 100
                         print(f"\r下载进度: {percent:.1f}% ({downloaded}/{total_size} bytes)", end='', flush=True)
         
-        print(f"\n✅ 下载完成: {filepath}")
+        print()
+        logging.info(f"下载完成: {filepath}")
         return filepath
     except Exception as e:
-        print(f"\n❌ 下载失败: {e}")
-        print(f"请手动下载数据集并保存为 {filepath}")
-        print(f"下载地址: {url}")
+        logging.error(f"下载失败: {e}")
+        logging.error(f"请手动下载数据集并保存为 {filepath}")
+        logging.error(f"下载地址: {url}")
         raise
 
 
@@ -82,12 +99,12 @@ def load_data_from_url(name: str, url: str, metric: str) -> Tuple[np.ndarray, np
     filepath = download_dataset(url, filename)
     
     with h5py.File(filepath, 'r') as f:
-        print(f"📂 数据集 {name} 的键: {list(f.keys())}")
+        logging.info(f"数据集 {name} 键: {list(f.keys())}")
         train = f['train'][:].astype(np.float32)
         test = f['test'][:].astype(np.float32)
         neighbors = f['neighbors'][:]  # Ground truth 最近邻
     
-    print(f"  训练集: {train.shape}, 测试集: {test.shape}, Ground truth: {neighbors.shape}")
+    logging.info(f"训练集: {train.shape}, 测试集: {test.shape}, GT: {neighbors.shape}")
     return train, test, neighbors, metric
 
 
@@ -154,15 +171,16 @@ def run_experiment(name: str, url: str, metric: str) -> Dict:
     对单个数据集运行实验
     返回结果字典
     """
-    print(f"\n{'='*80}")
-    print(f"🔬 实验: {name} (metric={metric})")
-    print(f"{'='*80}")
+    logging.info("="*60)
+    logging.info(f"实验: {name} (metric={metric})")
+    logging.info("="*60)
     
     # 加载数据
     train, test, gt, metric = load_data_from_url(name, url, metric)
     
     results = {
         "name": name,
+        "train_size": int(train.shape[0]),
         "M": [],
         "recall": [],
         "qps": [],
@@ -172,19 +190,17 @@ def run_experiment(name: str, url: str, metric: str) -> Dict:
     
     # 对每个 M 值进行测试
     for M in M_VALUES:
-        print(f"\n▶️  测试 M = {M}")
+        logging.info(f"开始构建索引: M={M}, efConstruction={EF_CONSTRUCTION}")
         
         # 构建索引
+        t0 = time.time()
         index, build_time = build_hnsw_index(train.copy(), M, EF_CONSTRUCTION, metric)
-        print(f"  ✅ 索引构建完成，耗时: {build_time:.2f}秒")
+        logging.info(f"索引构建完成，用时 {build_time:.2f}s")
         
         # 评估性能
         recall, qps = evaluate(index, test.copy(), gt, EF_SEARCH, metric)
         one_minus_recall = 1.0 - recall
-        
-        print(f"  📊 Recall@1: {recall:.4f}")
-        print(f"  📊 1-Recall@1: {one_minus_recall:.4f}")
-        print(f"  📊 QPS: {qps:.2f}")
+        logging.info(f"评估: Recall@1={recall:.4f}, 1-Recall@1={one_minus_recall:.4f}, QPS={qps:.2f}")
         
         # 记录结果
         results["M"].append(M)
@@ -207,8 +223,10 @@ def plot_metric(results: Dict[str, Dict], xlabel: str, ylabel: str,
         x = results[name]["recall"]
         y = results[name][y_key]
         M_list = results[name]["M"]
-        
-        plt.plot(x, y, marker='o', label=name, linewidth=2, markersize=8)
+        train_size = results[name].get("train_size")
+        label = f"{name} (N={train_size})" if train_size is not None else name
+
+        plt.plot(x, y, marker='o', label=label, linewidth=2, markersize=8)
         
         # 为每个点添加 M 值标注
         for i, M in enumerate(M_list):
@@ -220,8 +238,10 @@ def plot_metric(results: Dict[str, Dict], xlabel: str, ylabel: str,
     plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_filename, dpi=300)
-    print(f"📊 图表已保存: {output_filename}")
+    out_dir = _get_output_dir()
+    output_path = os.path.join(out_dir, os.path.basename(output_filename))
+    plt.savefig(output_path, dpi=300)
+    logging.info(f"图表已保存: {output_path}")
     plt.close()
 
 
@@ -244,25 +264,25 @@ def save_results_to_csv(results: Dict[str, Dict], output_filename: str):
     
     # 写入 CSV
     if rows:
-        fieldnames = rows[0].keys()
-        with open(output_filename, 'w', newline='') as csvfile:
+        fieldnames = list(rows[0].keys())
+        out_dir = _get_output_dir()
+        output_path = os.path.join(out_dir, os.path.basename(output_filename))
+        with open(output_path, 'w', newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-        print(f"💾 结果已保存到: {output_filename}")
+        logging.info(f"结果已保存到: {output_path}")
 
 
 def print_summary_table(results: Dict[str, Dict]):
     """
     打印结果汇总表格
     """
-    print("\n" + "="*80)
-    print("📋 结果汇总")
-    print("="*80)
+    logging.info("结果汇总")
     
     # 打印表头
     header = f"{'Dataset':<15} | {'M':>5} | {'Recall@1':>10} | {'1-Recall@1':>12} | {'QPS':>10} | {'Build Time':>12}"
-    print(header)
+    print("\n" + header)
     print("-" * len(header))
     
     # 打印数据
@@ -277,11 +297,41 @@ def print_summary_table(results: Dict[str, Dict]):
             print(row)
 
 
+def generate_report(results: Dict[str, Dict]):
+    out_dir = _get_output_dir()
+    report_path = os.path.join(out_dir, "part2_report.md")
+    qps_img = "part2_qps_vs_recall.png"
+    build_img = "part2_build_time_vs_recall.png"
+
+    lines: List[str] = []
+    lines.append("## Part 2 报告：HNSW 在不同数据集大小上的权衡\n")
+    lines.append("")
+    lines.append("### 数据集规模\n")
+    for name in results:
+        n = results[name].get("train_size")
+        lines.append(f"- {name}: N={n}")
+    lines.append("")
+    lines.append("### 图1：QPS vs Recall@1\n")
+    lines.append(f"![QPS vs Recall]({qps_img})\n")
+    lines.append("- 横轴：Recall@1；纵轴：QPS。不同曲线代表不同数据集规模，点上标注为对应的 M 值。\n")
+    lines.append("")
+    lines.append("### 图2：Index Build Time vs Recall@1\n")
+    lines.append(f"![Build Time vs Recall]({build_img})\n")
+    lines.append("- 横轴：Recall@1；纵轴：索引构建时间（秒）。不同曲线代表不同数据集规模，点上标注为对应的 M 值。\n")
+    lines.append("")
+    lines.append("### 简要分析\n")
+    lines.append("- 随 M 增大，Recall 提升但构建时间与查询代价上升，QPS 通常下降。\n")
+    lines.append("- 数据集越大，同等 M 下 Recall 较低且构建时间更长；需要更大的 M 才能达到相似 Recall。\n")
+    lines.append("- 需要在目标 Recall 与可接受吞吐/构建开销之间权衡，选择合适的 M。\n")
+
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
+    logging.info(f"报告已生成: {report_path}")
+
+
 def main():
     """主函数"""
-    print("="*80)
-    print("🚀 Part 2: HNSW Benchmarking with Increasing Dataset Sizes")
-    print("="*80)
+    logging.info("Part 2: HNSW Benchmarking with Increasing Dataset Sizes")
     
     # 运行所有数据集的实验
     all_results = {}
@@ -296,36 +346,34 @@ def main():
             all_results[name] = results
             
         except Exception as e:
-            print(f"\n❌ 处理数据集 {dataset_info['name']} 时出错: {e}")
+            logging.error(f"处理数据集 {dataset_info['name']} 时出错: {e}")
             import traceback
             traceback.print_exc()
             continue
     
     # 生成可视化结果
     if all_results:
-        print("\n" + "="*80)
-        print("📊 生成可视化结果...")
-        print("="*80)
+        logging.info("生成可视化结果与报告…")
         
         # 图1: QPS vs Recall@1 (用不同曲线表示不同数据集，标注M值)
         plot_metric(all_results, "Recall@1", "QPS", "qps", "qps", 
-                   "./part2_qps_vs_recall.png")
+                   "part2_qps_vs_recall.png")
         
         # 图2: Index Build Time vs Recall@1 (用不同曲线表示不同数据集，标注M值)
         plot_metric(all_results, "Recall@1", "Index Build Time (s)", 
-                   "build_time", "build_time", "./part2_build_time_vs_recall.png")
+                   "build_time", "build_time", "part2_build_time_vs_recall.png")
         
         # 保存 CSV 结果
-        save_results_to_csv(all_results, "./part2_results.csv")
+        save_results_to_csv(all_results, "part2_results.csv")
         
         # 打印汇总表格
         print_summary_table(all_results)
-        
-        print("\n" + "="*80)
-        print("✅ 所有实验完成！")
-        print("="*80)
+
+        # 生成报告
+        generate_report(all_results)
+        logging.info("所有实验完成！")
     else:
-        print("\n❌ 没有结果可显示！")
+        logging.error("没有结果可显示！")
 
 
 if __name__ == "__main__":

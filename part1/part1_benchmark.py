@@ -5,6 +5,7 @@ import os
 import time
 import requests
 import matplotlib.pyplot as plt
+import csv
 from typing import Tuple
 
 
@@ -126,6 +127,41 @@ def benchmark_hnsw_vs_lsh():
         recall_at_1 = float(np.mean((ann_ids.reshape(-1) == exact_top1)))
         lsh_points.append((recall_at_1, qps))
         print(f"  nbits={nbits}: Recall@1={recall_at_1:.4f}, QPS={qps:.2f}")
+
+    # 仅添加数据收集：将结果保存为 CSV 到 part1 目录
+    try:
+        output_dir = os.path.dirname(__file__) if '__file__' in globals() else '.'
+
+        # HNSW 结果 CSV
+        hnsw_csv_path = os.path.join(output_dir, "part1_hnsw_results.csv")
+        with open(hnsw_csv_path, "w", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["algorithm", "M", "efSearch", "recall@1", "1-recall@1", "qps"])
+            for (recall, qps), ef_s in zip(hnsw_points, hnsw_ef_search_list):
+                writer.writerow(["HNSW", hnsw_M, ef_s, f"{recall:.6f}", f"{1.0 - recall:.6f}", f"{qps:.6f}"])
+        print(f"HNSW 结果已保存: {hnsw_csv_path}")
+
+        # LSH 结果 CSV
+        lsh_csv_path = os.path.join(output_dir, "part1_lsh_results.csv")
+        with open(lsh_csv_path, "w", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["algorithm", "nbits", "recall@1", "1-recall@1", "qps"])
+            for (recall, qps), nb in zip(lsh_points, lsh_nbits_list):
+                writer.writerow(["LSH", nb, f"{recall:.6f}", f"{1.0 - recall:.6f}", f"{qps:.6f}"])
+        print(f"LSH 结果已保存: {lsh_csv_path}")
+
+        # 合并结果 CSV
+        combined_csv_path = os.path.join(output_dir, "part1_results.csv")
+        with open(combined_csv_path, "w", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["algorithm", "param", "value", "M", "recall@1", "1-recall@1", "qps"])
+            for (recall, qps), ef_s in zip(hnsw_points, hnsw_ef_search_list):
+                writer.writerow(["HNSW", "efSearch", ef_s, hnsw_M, f"{recall:.6f}", f"{1.0 - recall:.6f}", f"{qps:.6f}"])
+            for (recall, qps), nb in zip(lsh_points, lsh_nbits_list):
+                writer.writerow(["LSH", "nbits", nb, "", f"{recall:.6f}", f"{1.0 - recall:.6f}", f"{qps:.6f}"])
+        print(f"综合结果已保存: {combined_csv_path}")
+    except Exception as e:
+        print(f"保存 CSV 失败: {e}")
 
     # 绘图：QPS vs Recall
     print("\n绘制图表...")
